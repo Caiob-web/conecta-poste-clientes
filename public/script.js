@@ -1,6 +1,7 @@
 // =====================================================================
 //  script.js — Mapa de Postes + Excel, PDF, Censo, Coordenadas
 //  (Street View via link público do Google — sem API, sem custo)
+//  Atualizado: compatível com <script type="module"> e sem login.html
 // =====================================================================
 
 // ------------------------- Estilos do HUD (hora/tempo/mapa) ----------
@@ -192,7 +193,7 @@ const esriSat = L.tileLayer(
 );
 // Rótulos por cima do satélite
 const labelsPane = map.createPane("labels");
-// FIX: manter rótulos **abaixo** dos tooltips (tooltipPane=650). Antes era 650 e podia cobrir o tooltip.
+// manter rótulos abaixo dos tooltips
 labelsPane.style.zIndex = 640;
 labelsPane.style.pointerEvents = "none";
 const cartoLabels = L.tileLayer(
@@ -214,7 +215,6 @@ function dotStyle(qtdEmpresas){
     fillColor: (qtdEmpresas >= 5 ? "#d64545" : "#24a148"),
     fillOpacity: 0.95,
     renderer: DOT_RENDERER,
-    // FIX: garantir interatividade do path em Canvas e evitar “propagação” fechar/consumir cliques
     interactive: true,
     bubblingMouseEvents: false
   };
@@ -249,14 +249,11 @@ const markers = L.markerClusterGroup({
   }
 });
 markers.on("clusterclick", (e) => e.layer.spiderfy());
-// failsafe: qualquer layer simples dentro do cluster abre popup
 markers.on("click", (e) => {
-  // FIX: se vier DOM event, não deixa “subir”
   if (e && e.originalEvent) L.DomEvent.stop(e.originalEvent);
   const l = e.layer;
   if (l && typeof l.getAllChildMarkers === "function") return; // é um cluster
   if (l && l.posteData) {
-    // tenta também abrir tooltip, se existir
     try { l.openTooltip?.(); } catch {}
     abrirPopup(l.posteData);
   }
@@ -274,8 +271,8 @@ function scheduleIdle(fn){ document.hidden ? setTimeout(fn, 0) : idle(fn); }
    Popup fixo: instância única, sem piscar
 ==================================================================== */
 const mainPopup = L.popup({ closeOnClick:false, autoClose:false, maxWidth:360 });
-let popupPinned = false;                 // true se o usuário não fechou o popup
-let lastPopup = null;                    // {lat, lon, html}
+let popupPinned = false;
+let lastPopup = null;
 
 function reabrirPopupFixo(delay = 0){
   if (!popupPinned || !lastPopup) return;
@@ -298,31 +295,27 @@ function criarLayerPoste(p){
       { direction: "top", sticky: true }
     )
     .on("click", (e) => {
-      // FIX: impedir que o clique “suba” e garantir abertura
       if (e && e.originalEvent) L.DomEvent.stop(e.originalEvent);
       try { e.target.openTooltip?.(); } catch {}
       abrirPopup(p);
     });
-  layer.posteData = p; // usado pelo failsafe do cluster
+  layer.posteData = p;
   idToMarker.set(p.id, layer);
   return layer;
 }
 
-// Adiciona 1 poste (usado em filtros, etc.)
 function adicionarMarker(p) {
   const layer = criarLayerPoste(p);
   if (!markers.hasLayer(layer)) markers.addLayer(layer);
 }
 
-// Exibe TODOS os já criados no cache
 function exibirTodosPostes() {
   const arr = Array.from(idToMarker.values());
   markers.clearLayers();
-  if (arr.length) markers.addLayers(arr); // usa chunkedLoading
+  if (arr.length) markers.addLayers(arr);
   reabrirPopupFixo(0);
 }
 
-// Carrega gradativamente TODOS os postes (uma vez) e mantém no mapa
 function carregarTodosPostesGradualmente() {
   if (todosCarregados) { exibirTodosPostes(); return; }
   const lote = document.hidden ? 3500 : 1200;
@@ -338,11 +331,12 @@ function carregarTodosPostesGradualmente() {
   scheduleIdle(addChunk);
 }
 
-// ---- Indicadores / BI (refs de gráfico) ----
+// ---- Indicadores / BI ----
 let chartMunicipiosRef = null;
 
 // Dados e sets para autocomplete
 const todosPostes = [];
+window.todosPostes = todosPostes; // expõe para o index.html
 const empresasContagem = {};
 const municipiosSet = new Set();
 const bairrosSet = new Set();
@@ -359,7 +353,6 @@ if (overlay) overlay.style.display = "flex";
   const painel = document.querySelector(".painel-busca");
   if (!hud || !painel) return;
 
-  // move o HUD para o painel, logo abaixo do .actions (lado direito)
   const actions = painel.querySelector(".actions");
   hud.classList.add("dock-hud");
   if (actions && actions.parentNode === painel) {
@@ -411,12 +404,13 @@ if (overlay) overlay.style.display = "flex";
 })();
 
 // ---------------------------------------------------------------------
-// Carrega /api/postes, trata 401 redirecionando
+// Carrega /api/postes, trata 401 sem login.html
 // ---------------------------------------------------------------------
 fetch("/api/postes", { credentials: "include" })
   .then((res) => {
     if (res.status === 401) {
-      window.location.href = "/login.html";
+      alert("Sessão expirada. Faça login novamente.");
+      window.location.replace("/");
       throw new Error("Não autorizado");
     }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -459,6 +453,7 @@ fetch("/api/postes", { credentials: "include" })
 function preencherListas() {
   const mount = (set, id) => {
     const dl = document.getElementById(id);
+    if (!dl) return;
     Array.from(set).sort().forEach((v) => {
       const o = document.createElement("option");
       o.value = v; dl.appendChild(o);
@@ -468,10 +463,12 @@ function preencherListas() {
   mount(bairrosSet, "lista-bairros");
   mount(logradourosSet, "lista-logradouros");
   const dlEmp = document.getElementById("lista-empresas");
-  Object.keys(empresasContagem).sort().forEach((e) => {
-    const o = document.createElement("option");
-    o.value = e; o.label = `${e} (${empresasContagem[e]} postes)`; dlEmp.appendChild(o);
-  });
+  if (dlEmp) {
+    Object.keys(empresasContagem).sort().forEach((e) => {
+      const o = document.createElement("option");
+      o.value = e; o.label = `${e} (${empresasContagem[e]} postes)`; dlEmp.appendChild(o);
+    });
+  }
 }
 
 // ---------------------------------------------------------------------
@@ -497,7 +494,7 @@ function gerarExcelCliente(filtroIds) {
 // ---------------------------------------------------------------------
 // Modo Censo
 // ---------------------------------------------------------------------
-document.getElementById("btnCenso").addEventListener("click", async () => {
+document.getElementById("btnCenso")?.addEventListener("click", async () => {
   censoMode = !censoMode;
   markers.clearLayers();
   if (!censoMode) { exibirTodosPostes(); reabrirPopupFixo(0); return; }
@@ -518,7 +515,6 @@ document.getElementById("btnCenso").addEventListener("click", async () => {
     .forEach((poste) => {
       const c = L.circleMarker([poste.lat, poste.lon], {
         radius: 6, color: "#666", fillColor: "#bbb", weight: 2, fillOpacity: 0.8, renderer: DOT_RENDERER,
-        // FIX: garantir clique no Canvas e não deixar subir
         interactive: true, bubblingMouseEvents: false
       }).bindTooltip(`ID: ${poste.id}`, { direction: "top", sticky: true });
       c.on("click", (e) => { if (e && e.originalEvent) L.DomEvent.stop(e.originalEvent); try{c.openTooltip?.();}catch{} abrirPopup(poste); });
@@ -532,7 +528,8 @@ document.getElementById("btnCenso").addEventListener("click", async () => {
 // Interações / filtros
 // ---------------------------------------------------------------------
 function buscarID() {
-  const id = document.getElementById("busca-id").value.trim();
+  const el = document.getElementById("busca-id");
+  const id = el ? el.value.trim() : "";
   const p = todosPostes.find((x) => x.id === id);
   if (!p) return alert("Poste não encontrado.");
   map.setView([p.lat, p.lon], 18);
@@ -540,7 +537,8 @@ function buscarID() {
 }
 
 function buscarCoordenada() {
-  const inpt = document.getElementById("busca-coord").value.trim();
+  const inptEl = document.getElementById("busca-coord");
+  const inpt = inptEl ? inptEl.value.trim() : "";
   const [lat, lon] = inpt.split(/,\s*/).map(Number);
   if (isNaN(lat) || isNaN(lon)) return alert("Use o formato: lat,lon");
   map.setView([lat, lon], 18);
@@ -548,13 +546,13 @@ function buscarCoordenada() {
 }
 
 function filtrarLocal() {
-  const getVal = (id) => document.getElementById(id).value.trim().toLowerCase();
+  const getVal = (id) => (document.getElementById(id)?.value || "").trim().toLowerCase();
   const [mun, bai, log, emp] = ["busca-municipio","busca-bairro","busca-logradouro","busca-empresa"].map(getVal);
   const filtro = todosPostes.filter(
     (p) =>
-      (!mun || p.nome_municipio.toLowerCase() === mun) &&
-      (!bai || p.nome_bairro.toLowerCase() === bai) &&
-      (!log || p.nome_logradouro.toLowerCase() === log) &&
+      (!mun || (p.nome_municipio||"").toLowerCase() === mun) &&
+      (!bai || (p.nome_bairro||"").toLowerCase() === bai) &&
+      (!log || (p.nome_logradouro||"").toLowerCase() === log) &&
       (!emp || p.empresas.join(", ").toLowerCase().includes(emp))
   );
   if (!filtro.length) return alert("Nenhum poste encontrado com esses filtros.");
@@ -563,6 +561,7 @@ function filtrarLocal() {
   filtro.forEach(adicionarMarker);
   reabrirPopupFixo(0);
 
+  // Tentativa de gerar Excel via backend (rota opcional)
   fetch("/api/postes/report", {
     method: "POST",
     credentials: "include",
@@ -571,7 +570,8 @@ function filtrarLocal() {
   })
     .then(async (res) => {
       if (res.status === 401) {
-        window.location.href = "/login.html";
+        alert("Sessão expirada. Faça login novamente.");
+        window.location.replace("/");
         throw new Error("Não autorizado");
       }
       if (!res.ok) throw new Error((await res.json()).error || `HTTP ${res.status}`);
@@ -585,18 +585,18 @@ function filtrarLocal() {
       URL.revokeObjectURL(u);
     })
     .catch((e) => {
-      console.error("Erro exportar filtro:", e);
-      alert("Falha ao gerar Excel backend:\n" + e.message);
+      console.warn("Exportação backend indisponível, usando cliente.", e);
     });
 
+  // Excel no cliente sempre disponível
   gerarExcelCliente(filtro.map((p) => p.id));
 }
 
 function resetarMapa() { exibirTodosPostes(); reabrirPopupFixo(0); }
 
-/* ====================================================================
-   ÍCONES 48px — poste fotorealista + halo de disponibilidade
-==================================================================== */
+// ---------------------------------------------------------------------
+// ÍCONES 48px — poste fotorealista + halo
+// ---------------------------------------------------------------------
 function makePolePhoto48(glowHex) {
   const svg = `
   <svg width="48" height="48" viewBox="0 0 42 42" xmlns="http://www.w3.org/2000/svg">
@@ -649,7 +649,8 @@ function poleIcon48(color) { return color === "red" ? ICON_RED_48 : ICON_GREEN_4
 function poleColorByEmpresas(qtd) { return (qtd >= 5) ? "red" : "green"; }
 
 // ---------------------------------------------------------------------
-// === Street View gratuito (link público) =============================
+// Street View gratuito (link público)
+// ---------------------------------------------------------------------
 function buildGoogleMapsPanoURL(lat, lng) {
   return `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${lat},${lng}`;
 }
@@ -715,7 +716,7 @@ function abrirPopup(p) {
 // ---------------------------------------------------------------------
 // Minha localização
 // ---------------------------------------------------------------------
-document.getElementById("localizacaoUsuario").addEventListener("click", () => {
+document.getElementById("localizacaoUsuario")?.addEventListener("click", () => {
   if (!navigator.geolocation) return alert("Geolocalização não suportada.");
   navigator.geolocation.getCurrentPosition(
     ({ coords }) => {
@@ -790,7 +791,7 @@ setInterval(() => {
 // Verificar (Consulta massiva + traçado + intermediários)
 // ---------------------------------------------------------------------
 function consultarIDsEmMassa() {
-  const ids = document.getElementById("ids-multiplos").value.split(/[^0-9]+/).filter(Boolean);
+  const ids = (document.getElementById("ids-multiplos")?.value || "").split(/[^0-9]+/).filter(Boolean);
   if (!ids.length) return alert("Nenhum ID fornecido.");
   markers.clearLayers();
   if (window.tracadoMassivo) map.removeLayer(window.tracadoMassivo);
@@ -815,7 +816,6 @@ function consultarIDsEmMassa() {
         .forEach((p) => {
           const m = L.circleMarker([p.lat, p.lon], {
             radius: 6, color: "gold", fillColor: "yellow", fillOpacity: 0.8,
-            // FIX: interativo e sem bubbling
             interactive: true, bubblingMouseEvents: false
           }).bindTooltip(`ID: ${p.id}<br>Empresas: ${p.empresas.join(", ")}`, { direction: "top", sticky: true })
             .on("click", (e) => { if (e && e.originalEvent) L.DomEvent.stop(e.originalEvent); try{m.openTooltip?.();}catch{} abrirPopup(p); })
@@ -845,7 +845,6 @@ function consultarIDsEmMassa() {
   reabrirPopupFixo(0);
 }
 
-// Adiciona marcador numerado (usa o mesmo abrirPopup)
 function adicionarNumerado(p, num) {
   const cor = p.empresas.length >= 5 ? "red" : "green";
   const html = `<div style="
@@ -898,11 +897,11 @@ function limparTudo() {
   if (window.tracadoMassivo) { map.removeLayer(window.tracadoMassivo); window.tracadoMassivo = null; }
   window.intermediarios?.forEach((m) => map.removeLayer(m));
   ["ids-multiplos","busca-id","busca-coord","busca-municipio","busca-bairro","busca-logradouro","busca-empresa"]
-    .forEach((id) => { document.getElementById(id).value = ""; });
+    .forEach((id) => { const el = document.getElementById(id); if (el) el.value = ""; });
   resetarMapa();
 }
 
-// Exporta Excel genérico
+// Exporta Excel genérico (backend opcional)
 function exportarExcel(ids) {
   fetch("/api/postes/report", {
     method: "POST",
@@ -912,7 +911,8 @@ function exportarExcel(ids) {
   })
     .then(async (res) => {
       if (res.status === 401) {
-        window.location.href = "/login.html";
+        alert("Sessão expirada. Faça login novamente.");
+        window.location.replace("/");
         throw new Error("Não autorizado");
       }
       if (!res.ok) {
@@ -929,46 +929,41 @@ function exportarExcel(ids) {
       URL.revokeObjectURL(u);
     })
     .catch((e) => {
-      console.error("Erro Excel:", e);
-      alert("Falha ao gerar Excel:\n" + e.message);
+      console.warn("Falha Excel backend, tente o Excel local (filtros).", e);
     });
 }
 
-// Botão Excel
-document.getElementById("btnGerarExcel").addEventListener("click", () => {
-  const ids = document.getElementById("ids-multiplos").value.split(/[^0-9]+/).filter(Boolean);
+// Botão Excel (manual)
+document.getElementById("btnGerarExcel")?.addEventListener("click", () => {
+  const ids = (document.getElementById("ids-multiplos")?.value || "").split(/[^0-9]+/).filter(Boolean);
   if (!ids.length) return alert("Informe ao menos um ID.");
   exportarExcel(ids);
 });
 
 // Toggle painel
-document.getElementById("togglePainel").addEventListener("click", () => {
+document.getElementById("togglePainel")?.addEventListener("click", () => {
   const p = document.querySelector(".painel-busca");
   const body = document.body;
+  if (!p) return;
   p.classList.toggle("collapsed");
   body.classList.toggle("sidebar-collapsed", p.classList.contains("collapsed"));
   const onEnd = () => { map.invalidateSize(); p.removeEventListener("transitionend", onEnd); };
   p.addEventListener("transitionend", onEnd);
 });
 
-// Logout (ATUALIZADO: robusto a offline e rota opcional)
-document.getElementById("logoutBtn").addEventListener("click", async () => {
+// Logout (sem login.html)
+document.getElementById("logoutBtn")?.addEventListener("click", async () => {
   try {
-    // limpa credenciais locais sempre
+    localStorage.removeItem("auth_user");
     localStorage.removeItem("auth_token");
     sessionStorage.removeItem("auth_token");
     document.cookie = "auth_token=; Max-Age=0; path=/; SameSite=Lax";
   } catch {}
 
-  // tenta avisar o servidor apenas se estiver online; ignora falhas
   if (navigator.onLine) {
-    try {
-      await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
-    } catch {}
+    try { await fetch("/api/auth/logout", { method: "POST", credentials: "include" }); } catch {}
   }
-
-  // usa replace para não voltar com back
-  window.location.replace("/login.html");
+  window.location.replace("/");
 });
 
 /* --------------------------------------------------------------------
@@ -1192,3 +1187,15 @@ function atualizarIndicadores() {
   style.textContent = css;
   document.head.appendChild(style);
 })();
+
+/* ====================================================================
+   EXPORTA FUNÇÕES/VARIÁVEIS PARA O ESCOPO GLOBAL (onclick no HTML)
+   (necessário porque estamos usando <script type="module">)
+==================================================================== */
+window.buscarID = buscarID;
+window.buscarCoordenada = buscarCoordenada;
+window.filtrarLocal = filtrarLocal;
+window.consultarIDsEmMassa = consultarIDsEmMassa;
+window.resetarMapa = resetarMapa;
+window.gerarPDFComMapa = gerarPDFComMapa;
+window.reabrirPopupFixo = reabrirPopupFixo;
