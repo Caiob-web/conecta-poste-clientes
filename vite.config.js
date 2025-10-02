@@ -1,15 +1,13 @@
 // vite.config.js
-import { defineConfig } from 'vite';
+import { defineConfig } from "vite";
 
 export default defineConfig({
+  root: "public",          // onde está seu index.html
+  build: {
+    outDir: "../dist",     // saída na raiz (dist/)
+    emptyOutDir: true
+  },
   server: {
-    proxy: {
-      // encaminha /api/* para o Express na porta 3000
-      '/api': {
-        target: 'http://localhost:3000',
-        changeOrigin: true,
-        secure: false
-      }
-    }
+    port: 5173
   }
 });
