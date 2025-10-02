@@ -10,7 +10,7 @@
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
 
-    <!-- Guard de REFRESH: se for reload (F5/Ctrl+R), encerra sessão e recarrega a própria página -->
+    <!-- Guard de REFRESH: se for reload (F5/Ctrl+R), encerra sessão e volta para a raiz (sem login.html) -->
     <script>
       (function () {
         try {
@@ -28,23 +28,25 @@
                   sessionStorage.removeItem("auth_token");
                   document.cookie = "auth_token=; Max-Age=0; Path=/; SameSite=Lax";
                 } catch(_) {}
-                location.reload(); // não redireciona para /login.html
+                // Sem login.html - volta para a raiz
+                location.replace("/");
               });
           }
         } catch (e) { /* silencioso */ }
       })();
     </script>
 
-    <!-- Guard de login (CLIENTE): apenas avisa no console se não houver auth_user -->
+    <!-- Guard de login (CLIENTE): sem redirecionar para login.html -->
     <script>
       (function () {
         try {
           const u = localStorage.getItem('auth_user');
           if (!u) {
+            // Sem login.html. Deixe o script.js exibir modal/overlay ou bloquear ações.
             console.warn("Sem auth_user: exiba modal de login via script.js.");
           }
         } catch (_) {
-          console.warn("Sem auth_user (erro de storage).");
+          console.warn("Storage indisponível: trate a autenticação no script.js.");
         }
       })();
     </script>
@@ -103,7 +105,14 @@
       .painel-busca .actions button:active { transform: translateY(1px) scale(.98); }
       .painel-busca .actions button .fa { margin-right: 6px; }
 
-      /* Legenda removida do layout */
+      .legenda {
+        position: absolute; bottom: 20px; right: 20px; background: rgba(15, 27, 42, 0.92); color: var(--ui-text);
+        padding: 12px 14px; border-radius: 12px; border: 1px solid var(--ui-border);
+        font-family: "Segoe UI", system-ui, -apple-system, Roboto, Arial, sans-serif; font-size: 13px; box-shadow: var(--shadow); z-index: 900;
+      }
+      .legenda-item { display: flex; align-items: center; margin-bottom: 6px; }
+      .legenda-item:last-child{ margin-bottom:0; }
+      .legenda-item .bolinha { width: 12px; height: 12px; border-radius: 50%; margin-right: 8px; border: 1px solid var(--ui-border); }
 
       .botao-topo {
         position: fixed; right: calc(var(--dock-w) + 16px); width: 42px; height: 42px;
@@ -208,6 +217,13 @@
       </div>
     </div>
 
+    <!-- Legenda -->
+    <div class="legenda">
+      <div class="legenda-item"><div class="bolinha" style="background: yellow"></div>Poste intermediário</div>
+      <div class="legenda-item"><div class="bolinha" style="background: green"></div>Até 5 empresas</div>
+      <div class="legenda-item"><div class="bolinha" style="background: red"></div>Mais de 5 empresas</div>
+    </div>
+
     <!-- Mapa -->
     <div id="map"></div>
 
@@ -217,16 +233,15 @@
       <div class="texto-loading">Carregando postes…</div>
     </div>
 
-    <!-- JS -->
+    <!-- JS libs -->
     <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
     <script src="https://unpkg.com/leaflet.markercluster/dist/leaflet.markercluster.js"></script>
     <script src="https://unpkg.com/xlsx/dist/xlsx.full.min.js"></script>
-
-    <!-- App -->
-    <script src="script.js"></script>
-
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://unpkg.com/leaflet-image/leaflet-image.js"></script>
+
+    <!-- App (como módulo para Vite). Se seu arquivo estiver em /src, troque para /src/main.js -->
+    <script type="module" src="/script.js"></script>
 
     <!-- Logout (CLIENTE) -->
     <script>
@@ -236,11 +251,12 @@
           sessionStorage.removeItem("auth_token");
           document.cookie = "auth_token=; Max-Age=0; Path=/; SameSite=Lax";
         } catch(_) {}
-        location.reload(); // não redireciona para /login.html
+        // Sem login.html
+        location.replace("/");
       });
     </script>
 
-    <!-- Excel automático após filtragem (mais robusto) -->
+    <!-- Excel automático após filtragem (mantido) -->
     <script>
       function gerarExcelCliente(filtroIds) {
         const dadosParaExcel = (window.todosPostes || [])
@@ -250,7 +266,7 @@
             Município: p.nome_municipio,
             Bairro: p.nome_bairro,
             Logradouro: p.nome_logradouro,
-            Empresas: (p.empresas || []).join(", "),
+            Empresas: Array.isArray(p.empresas) ? p.empresas.join(", ") : (p.empresas || ""),
             Coordenadas: p.coordenadas,
           }));
         const ws = XLSX.utils.json_to_sheet(dadosParaExcel);
@@ -259,41 +275,29 @@
         XLSX.writeFile(wb, "relatorio_filtrado.xlsx");
       }
 
-      // Envolve de forma segura a função filtrarLocal, mesmo que ainda não exista
-      (function wrapFiltrarComExcel(){
-        const original = typeof window.filtrarLocal === "function"
-          ? window.filtrarLocal
-          : function(){ /* placeholder até script.js definir */ };
-
+      const _origFiltrarLocal = window.filtrarLocal;
+      if (typeof _origFiltrarLocal === "function") {
         window.filtrarLocal = function () {
-          // Chama a original (se houver)
-          try { original(); } catch (e) { console.warn("filtrarLocal original não executou:", e); }
+          _origFiltrarLocal();
+          const mun = document.getElementById("busca-municipio").value.trim().toLowerCase();
+          const bai = document.getElementById("busca-bairro").value.trim().toLowerCase();
+          const log = document.getElementById("busca-logradouro").value.trim().toLowerCase();
+          const emp = document.getElementById("busca-empresa").value.trim().toLowerCase();
 
-          // Em seguida, tenta gerar o Excel com base nos campos de filtro
-          try {
-            const getVal = (id) => (document.getElementById(id)?.value || "").trim().toLowerCase();
-            const mun = getVal("busca-municipio");
-            const bai = getVal("busca-bairro");
-            const log = getVal("busca-logradouro");
-            const emp = getVal("busca-empresa");
+          const base = Array.isArray(window.todosPostes) ? window.todosPostes : [];
+          const filtro = base.filter((p) =>
+            (!mun || (p.nome_municipio||"").toLowerCase() === mun) &&
+            (!bai || (p.nome_bairro||"").toLowerCase() === bai) &&
+            (!log || (p.nome_logradouro||"").toLowerCase() === log) &&
+            (!emp || String(Array.isArray(p.empresas)?p.empresas.join(", "):p.empresas||"").toLowerCase().includes(emp))
+          );
 
-            if (!Array.isArray(window.todosPostes)) return;
-
-            const filtro = window.todosPostes.filter((p) =>
-              (!mun || (p.nome_municipio || "").toLowerCase() === mun) &&
-              (!bai || (p.nome_bairro || "").toLowerCase() === bai) &&
-              (!log || (p.nome_logradouro || "").toLowerCase() === log) &&
-              (!emp || (p.empresas || []).join(", ").toLowerCase().includes(emp))
-            );
-
-            if (filtro.length) {
-              gerarExcelCliente(filtro.map((p) => p.id));
-            }
-          } catch (e) {
-            console.warn("Não foi possível gerar Excel automático após filtragem:", e);
+          if (filtro.length) {
+            const ids = filtro.map((p) => p.id);
+            gerarExcelCliente(ids);
           }
         };
-      })();
+      }
     </script>
   </body>
 </html>
