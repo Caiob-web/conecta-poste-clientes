@@ -1,15 +1,23 @@
-// server.js
+// api/server.js
 // ====================================================================
 // App Express + sessão em PostgreSQL + autenticação simples (sem hash)
+// Compatível com ESM ("type": "module") e Functions do Vercel
 // ====================================================================
 
-const express = require("express");
-const cors = require("cors");
-const path = require("path");
-const session = require("express-session");
-const { Pool } = require("pg");
-const ExcelJS = require("exceljs");
-const pgSession = require("connect-pg-simple")(session);
+import express from "express";
+import cors from "cors";
+import path from "path";
+import session from "express-session";
+import pgPkg from "pg";
+import ExcelJS from "exceljs"; // (mantido caso você use em rotas futuras)
+import connectPgSimple from "connect-pg-simple";
+import { fileURLToPath } from "url";
+
+// ---------------------------------------------------------------
+// ESM __dirname
+// ---------------------------------------------------------------
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // ---------------------------------------------------------------
 // Config base
@@ -17,19 +25,22 @@ const pgSession = require("connect-pg-simple")(session);
 const app = express();
 const port = process.env.PORT || 3000;
 const NODE_ENV = process.env.NODE_ENV || "development";
+const IS_VERCEL = !!process.env.VERCEL;
 
 // ---------------------------------------------------------------
-// Banco (Neon) — sem fallback: exige DATABASE_URL no ambiente
+// Banco (Neon) — exige DATABASE_URL
 // ---------------------------------------------------------------
+const { Pool } = pgPkg;
+
 const PG_CONN = process.env.DATABASE_URL;
 if (!PG_CONN) {
   console.error("Faltou DATABASE_URL no ambiente. Configure e rode de novo.");
-  process.exit(1);
+  throw new Error("DATABASE_URL ausente");
 }
 
 const pool = new Pool({
   connectionString: PG_CONN,
-  ssl: { rejectUnauthorized: false }, // Neon exige SSL
+  ssl: { rejectUnauthorized: false }, // Neon/Cloud exige SSL
 });
 
 // Cria tabela users se não existir
@@ -38,7 +49,7 @@ async function ensureUsersTable() {
     CREATE TABLE IF NOT EXISTS public.users (
       id            bigserial PRIMARY KEY,
       username      text UNIQUE NOT NULL,
-      password_hash text NOT NULL,  -- senha em TEXTO PURO
+      password_hash text NOT NULL,  -- senha em TEXTO PURO (uso interno)
       is_active     boolean NOT NULL DEFAULT true,
       created_at    timestamptz NOT NULL DEFAULT now()
     );
@@ -56,17 +67,21 @@ app.set("trust proxy", 1);
 app.use(express.json({ limit: "1gb" }));
 app.use(express.urlencoded({ limit: "1gb", extended: true }));
 
+// CORS: ajuste FRONT_ORIGIN para seu domínio do Vercel, ex: https://seu-app.vercel.app
+// Se não setar, usa 'true' (reflete o Origin e permite credenciais).
+const FRONT_ORIGIN = process.env.FRONT_ORIGIN || true;
 app.use(
   cors({
-    origin: true, // ajuste para seu domínio ex.: https://conecta-poste.vercel.app
+    origin: FRONT_ORIGIN,
     credentials: true,
   })
 );
 
 // Sessão persistida no Postgres
+const PgStore = connectPgSimple(session);
 app.use(
   session({
-    store: new pgSession({
+    store: new PgStore({
       conObject: {
         connectionString: PG_CONN,
         ssl: { rejectUnauthorized: false },
@@ -112,7 +127,7 @@ async function handleLogin(req, res) {
       return res.status(401).json({ error: "Credenciais inválidas" });
     }
 
-    // Comparação direta (sem hash)
+    // Comparação direta (sem hash) — uso interno
     if (String(user.password) !== String(password)) {
       return res.status(401).json({ error: "Credenciais inválidas" });
     }
@@ -167,58 +182,47 @@ app.post(["/logout", "/api/auth/logout"], handleLogout);
 app.get(["/me", "/api/auth/me"], handleMe);
 
 // ---------------------------------------------------------------
-// Proteção de rotas
+// Proteção de rotas (API-first, sem redirecionar para login.html)
 // ---------------------------------------------------------------
 app.use((req, res, next) => {
-  const openPaths = [
+  const openPaths = new Set([
     "/login",
     "/register",
     "/logout",
-    "/login.html",
-    "/register.html",
-    "/lgpd/",
     "/healthz",
     "/api/auth/login",
     "/api/auth/register",
     "/api/auth/logout",
     "/api/auth/me",
-  ];
+  ]);
 
-  const isStatic = /\.(html|css|js|png|ico|avif|webp|jpg|jpeg|svg|map|json|txt|csv|wasm)$/i.test(
-    req.path
-  );
+  const isStatic =
+    /\.(html|css|js|png|ico|avif|webp|jpg|jpeg|svg|map|json|txt|csv|wasm)$/i.test(
+      req.path
+    );
 
-  if (openPaths.some((p) => req.path.startsWith(p)) || isStatic) {
+  // Arquivos estáticos e caminhos abertos passam direto
+  if (isStatic || [...openPaths].some((p) => req.path.startsWith(p))) {
     return next();
   }
 
-  if (!req.session.user && (req.path === "/" || req.path === "")) {
-    return res.redirect("/login.html");
-  }
-
-  if (req.session.user && (req.path === "/" || req.path === "")) {
-    if (req.session.justLoggedIn) {
-      req.session.justLoggedIn = false;
-      return next();
-    }
-    return req.session.destroy(() => res.redirect("/login.html"));
-  }
-
+  // Protege apenas /api/*
   if (req.path.startsWith("/api/")) {
-    if (!req.session.user)
+    if (!req.session.user) {
       return res.status(401).json({ error: "Não autorizado" });
+    }
     return next();
   }
 
-  if (!req.session.user) return res.redirect("/login.html");
-  next();
+  // Qualquer outra rota (front SPA) deixamos seguir — o front decide o que mostrar
+  return next();
 });
 
 // ---------------------------------------------------------------
-// Static
+// Static (útil para rodar localmente: serve /public)
+// Em produção no Vercel, a parte estática vem do build do front.
 // ---------------------------------------------------------------
-const __dirnameResolved = path.resolve();
-app.use(express.static(path.join(__dirnameResolved, "public")));
+app.use(express.static(path.join(__dirname, "..", "public")));
 
 // ---------------------------------------------------------------
 // APIs do app (postes)
@@ -268,7 +272,7 @@ app.get("/api/censo", async (req, res) => {
 });
 
 // ---------------------------------------------------------------
-// Healthcheck & 404
+// Healthcheck & debug
 // ---------------------------------------------------------------
 app.get("/healthz", (req, res) => res.json({ ok: true }));
 
@@ -284,17 +288,13 @@ if (NODE_ENV !== "production") {
   });
 }
 
-app.use((req, res) => {
-  res.status(404).send("Rota não encontrada");
-});
-
 // ---------------------------------------------------------------
 // Start local / Export Vercel
 // ---------------------------------------------------------------
-if (!process.env.VERCEL) {
+if (!IS_VERCEL) {
   app.listen(port, () => {
     console.log(`Servidor rodando na porta ${port} (${NODE_ENV})`);
   });
 }
 
-module.exports = app;
+export default app;
