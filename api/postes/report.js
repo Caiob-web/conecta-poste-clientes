@@ -1,82 +1,70 @@
-// api/postes/report.js
-import { Pool } from "pg";
-import ExcelJS from "exceljs";
+// api/postes/report.js  (gera Excel dos IDs enviados)
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false },
-});
+import pkg from "pg";
+import ExcelJS from "exceljs";
+const { Pool } = pkg;
+
+const pool =
+  globalThis.__pg_pool ||
+  (globalThis.__pg_pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: { rejectUnauthorized: false }
+  }));
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
-    return res.status(405).send("Method Not Allowed");
+    res.setHeader("Allow", "POST");
+    return res.status(405).end("Method Not Allowed");
   }
-  const { ids } = req.body;
-  if (!Array.isArray(ids) || ids.length === 0) {
-    return res.status(400).json({ error: "IDs inválidos" });
-  }
-  const clean = ids.map((x) => String(x).trim()).filter(Boolean);
-  if (!clean.length) return res.status(400).json({ error: "Nenhum ID válido" });
 
   try {
+    const ids = (req.body?.ids || []).map(String).filter(Boolean);
+    if (!ids.length) return res.status(400).json({ error: "Envie ids[]" });
+
     const { rows } = await pool.query(
       `
-      SELECT d.id, d.nome_municipio, d.nome_bairro, d.nome_logradouro,
-             d.material, d.altura, d.tensao_mecanica, d.coordenadas,
-             ep.empresa
-      FROM dados_poste d
-      LEFT JOIN empresa_poste ep ON d.id::text = ep.id_poste
-      WHERE d.coordenadas IS NOT NULL AND TRIM(d.coordenadas)<>''  
-        AND d.id::text = ANY($1)
-    `,
-      [clean]
+      SELECT
+        d.id,
+        d.nome_municipio,
+        d.nome_bairro,
+        d.nome_logradouro,
+        d.material,
+        d.altura,
+        d.tensao_mecanica,
+        d.coordenadas
+      FROM public.dados_poste d
+      WHERE d.id = ANY($1::text[])
+      `,
+      [ids]
     );
-    if (!rows.length) return res.status(404).json({ error: "Nenhum poste encontrado" });
-
-    // Monta o Excel
-    const mapPostes = {};
-    rows.forEach((r) => {
-      if (!mapPostes[r.id]) mapPostes[r.id] = { ...r, empresas: new Set() };
-      if (r.empresa) mapPostes[r.id].empresas.add(r.empresa);
-    });
 
     const wb = new ExcelJS.Workbook();
-    const sh = wb.addWorksheet("Relatório de Postes");
-    sh.columns = [
+    const ws = wb.addWorksheet("Postes");
+    ws.columns = [
       { header: "ID POSTE", key: "id", width: 15 },
-      { header: "MUNICÍPIO", key: "nome_municipio", width: 20 },
-      { header: "BAIRRO", key: "nome_bairro", width: 25 },
-      { header: "LOGRADOURO", key: "nome_logradouro", width: 30 },
-      { header: "MATERIAL", key: "material", width: 15 },
-      { header: "ALTURA", key: "altura", width: 10 },
-      { header: "TENSÃO", key: "tensao_mecanica", width: 18 },
-      { header: "COORDENADAS", key: "coordenadas", width: 30 },
-      { header: "EMPRESAS", key: "empresas", width: 40 },
+      { header: "Município", key: "nome_municipio", width: 24 },
+      { header: "Bairro", key: "nome_bairro", width: 24 },
+      { header: "Logradouro", key: "nome_logradouro", width: 36 },
+      { header: "Material", key: "material", width: 14 },
+      { header: "Altura", key: "altura", width: 10 },
+      { header: "Tensão Mecânica", key: "tensao_mecanica", width: 16 },
+      { header: "Coordenadas", key: "coordenadas", width: 26 }
     ];
-
-    Object.values(mapPostes).forEach((info) => {
-      sh.addRow({
-        id: info.id,
-        nome_municipio: info.nome_municipio,
-        nome_bairro: info.nome_bairro,
-        nome_logradouro: info.nome_logradouro,
-        material: info.material,
-        altura: info.altura,
-        tensao_mecanica: info.tensao_mecanica,
-        coordenadas: info.coordenadas,
-        empresas: [...info.empresas].join(", "),
-      });
-    });
+    rows.forEach(r => ws.addRow(r));
 
     res.setHeader(
       "Content-Type",
       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     );
-    res.setHeader("Content-Disposition", "attachment; filename=relatorio_postes.xlsx");
+    res.setHeader(
+      "Content-Disposition",
+      'attachment; filename="relatorio_postes.xlsx"'
+    );
+
     await wb.xlsx.write(res);
     res.end();
   } catch (err) {
-    console.error("Erro report:", err);
-    res.status(500).json({ error: "Erro interno" });
+    console.error("ERRO /api/postes/report:", err);
+    res.status(500).json({ error: "Erro ao gerar relatório" });
   }
 }
