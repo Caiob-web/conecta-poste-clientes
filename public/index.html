@@ -10,7 +10,7 @@
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
 
-    <!-- Guard de REFRESH: se for reload (F5/Ctrl+R), faz logout e volta para o login -->
+    <!-- Guard de REFRESH: se for reload (F5/Ctrl+R), encerra sessão e recarrega a própria página -->
     <script>
       (function () {
         try {
@@ -28,21 +28,23 @@
                   sessionStorage.removeItem("auth_token");
                   document.cookie = "auth_token=; Max-Age=0; Path=/; SameSite=Lax";
                 } catch(_) {}
-                location.replace("/login.html");
+                location.reload(); // <- não redireciona para /login.html
               });
           }
         } catch (e) { /* silencioso */ }
       })();
     </script>
 
-    <!-- Guard de login (CLIENTE): se não houver auth_user, manda pro login -->
+    <!-- Guard de login (CLIENTE): apenas avisa no console se não houver auth_user -->
     <script>
       (function () {
         try {
           const u = localStorage.getItem('auth_user');
-          if (!u) location.replace('/login.html');
+          if (!u) {
+            console.warn("Sem auth_user: exiba modal de login via script.js.");
+          }
         } catch (_) {
-          location.replace('/login.html');
+          console.warn("Sem auth_user (erro de storage).");
         }
       })();
     </script>
@@ -234,7 +236,7 @@
           sessionStorage.removeItem("auth_token");
           document.cookie = "auth_token=; Max-Age=0; Path=/; SameSite=Lax";
         } catch(_) {}
-        location.replace("/login.html");
+        location.reload(); // <- não redireciona para /login.html
       });
     </script>
 
