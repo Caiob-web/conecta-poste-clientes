@@ -28,7 +28,7 @@
                   sessionStorage.removeItem("auth_token");
                   document.cookie = "auth_token=; Max-Age=0; Path=/; SameSite=Lax";
                 } catch(_) {}
-                location.reload(); // <- não redireciona para /login.html
+                location.reload(); // não redireciona para /login.html
               });
           }
         } catch (e) { /* silencioso */ }
@@ -236,21 +236,21 @@
           sessionStorage.removeItem("auth_token");
           document.cookie = "auth_token=; Max-Age=0; Path=/; SameSite=Lax";
         } catch(_) {}
-        location.reload(); // <- não redireciona para /login.html
+        location.reload(); // não redireciona para /login.html
       });
     </script>
 
-    <!-- Excel automático após filtragem (mantido) -->
+    <!-- Excel automático após filtragem (mais robusto) -->
     <script>
       function gerarExcelCliente(filtroIds) {
-        const dadosParaExcel = todosPostes
+        const dadosParaExcel = (window.todosPostes || [])
           .filter((p) => filtroIds.includes(p.id))
           .map((p) => ({
             "ID POSTE": p.id,
             Município: p.nome_municipio,
             Bairro: p.nome_bairro,
             Logradouro: p.nome_logradouro,
-            Empresas: p.empresas.join(", "),
+            Empresas: (p.empresas || []).join(", "),
             Coordenadas: p.coordenadas,
           }));
         const ws = XLSX.utils.json_to_sheet(dadosParaExcel);
@@ -259,26 +259,41 @@
         XLSX.writeFile(wb, "relatorio_filtrado.xlsx");
       }
 
-      const _origFiltrarLocal = filtrarLocal;
-      filtrarLocal = function () {
-        _origFiltrarLocal();
-        const mun = document.getElementById("busca-municipio").value.trim().toLowerCase();
-        const bai = document.getElementById("busca-bairro").value.trim().toLowerCase();
-        const log = document.getElementById("busca-logradouro").value.trim().toLowerCase();
-        const emp = document.getElementById("busca-empresa").value.trim().toLowerCase();
+      // Envolve de forma segura a função filtrarLocal, mesmo que ainda não exista
+      (function wrapFiltrarComExcel(){
+        const original = typeof window.filtrarLocal === "function"
+          ? window.filtrarLocal
+          : function(){ /* placeholder até script.js definir */ };
 
-        const filtro = todosPostes.filter((p) =>
-          (!mun || p.nome_municipio.toLowerCase() === mun) &&
-          (!bai || p.nome_bairro.toLowerCase() === bai) &&
-          (!log || p.nome_logradouro.toLowerCase() === log) &&
-          (!emp || p.empresas.join(", ").toLowerCase().includes(emp))
-        );
+        window.filtrarLocal = function () {
+          // Chama a original (se houver)
+          try { original(); } catch (e) { console.warn("filtrarLocal original não executou:", e); }
 
-        if (filtro.length) {
-          const ids = filtro.map((p) => p.id);
-          gerarExcelCliente(ids);
-        }
-      };
+          // Em seguida, tenta gerar o Excel com base nos campos de filtro
+          try {
+            const getVal = (id) => (document.getElementById(id)?.value || "").trim().toLowerCase();
+            const mun = getVal("busca-municipio");
+            const bai = getVal("busca-bairro");
+            const log = getVal("busca-logradouro");
+            const emp = getVal("busca-empresa");
+
+            if (!Array.isArray(window.todosPostes)) return;
+
+            const filtro = window.todosPostes.filter((p) =>
+              (!mun || (p.nome_municipio || "").toLowerCase() === mun) &&
+              (!bai || (p.nome_bairro || "").toLowerCase() === bai) &&
+              (!log || (p.nome_logradouro || "").toLowerCase() === log) &&
+              (!emp || (p.empresas || []).join(", ").toLowerCase().includes(emp))
+            );
+
+            if (filtro.length) {
+              gerarExcelCliente(filtro.map((p) => p.id));
+            }
+          } catch (e) {
+            console.warn("Não foi possível gerar Excel automático após filtragem:", e);
+          }
+        };
+      })();
     </script>
   </body>
 </html>
